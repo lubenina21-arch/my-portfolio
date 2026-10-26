@@ -1,0 +1,376 @@
+openapi: 3.0.3
+info:
+  title: Мой оператор — API мобильного приложения абонента
+  description: >
+    API для мобильного приложения абонента сотовой связи: авторизация,
+    просмотр баланса и тарифа, смена тарифа, управление дополнительными
+    опциями и просмотр истории изменений.
+  version: "1.0.0"
+
+servers:
+  - url: https://api.moy-operator.example.com/v1
+
+tags:
+  - name: Auth
+    description: Авторизация абонента (FR1)
+  - name: Balance
+    description: Баланс лицевого счёта (FR2)
+  - name: Tariffs
+    description: Тарифы абонента и каталог тарифов (FR3, FR4, FR5, FR6, FR7)
+  - name: Options
+    description: Дополнительные опции (FR8, FR9, FR11)
+  - name: History
+    description: История изменений тарифов и опций (FR10)
+
+paths:
+
+  /auth/request-code:
+    post:
+      tags: [Auth]
+      summary: Запросить SMS-код для авторизации
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone:
+                  type: string
+                  example: "+79991234567"
+      responses:
+        "200":
+          description: Код отправлен
+        "429":
+          description: Превышен лимит запросов — повторная отправка заблокирована на 15 минут
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/verify-code:
+    post:
+      tags: [Auth]
+      summary: Подтвердить код и получить токен доступа
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, code]
+              properties:
+                phone:
+                  type: string
+                  example: "+79991234567"
+                code:
+                  type: string
+                  example: "482913"
+      responses:
+        "200":
+          description: Авторизация успешна
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+        "400":
+          description: Неверный код
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /me:
+    get:
+      tags: [Balance]
+      summary: Получить профиль текущего абонента
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Данные абонента
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Abonent"
+
+  /me/balance:
+    get:
+      tags: [Balance]
+      summary: Получить баланс лицевого счёта
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Текущий баланс
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  balance:
+                    type: number
+                    format: decimal
+                    example: 350.5
+                  currency:
+                    type: string
+                    example: RUB
+        "503":
+          description: Биллинговая система временно недоступна
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /me/tariff:
+    get:
+      tags: [Tariffs]
+      summary: Получить текущий тариф абонента
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Текущий тариф
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tariff"
+
+    patch:
+      tags: [Tariffs]
+      summary: Сменить тариф абонента
+      description: >
+        Смена тарифа возможна не чаще одного раза в 24 часа и только
+        при достаточном балансе для оплаты нового тарифа (FR5, FR6).
+        Активные дополнительные опции сохраняются (FR7).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tariff_id]
+              properties:
+                tariff_id:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Тариф успешно изменён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tariff"
+        "402":
+          description: Недостаточно средств на балансе
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Смена тарифа уже выполнялась менее 24 часов назад
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /tariffs:
+    get:
+      tags: [Tariffs]
+      summary: Получить список всех доступных тарифов
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Список тарифов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tariff"
+
+  /options:
+    get:
+      tags: [Options]
+      summary: Получить каталог доступных дополнительных опций
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Список опций
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Option"
+
+  /me/options:
+    get:
+      tags: [Options]
+      summary: Получить список подключённых опций абонента
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Список активных опций абонента
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AbonentOption"
+
+  /me/options/{optionId}:
+    post:
+      tags: [Options]
+      summary: Подключить дополнительную опцию
+      description: Ограничений на количество активных опций нет (FR9).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/OptionId"
+      responses:
+        "200":
+          description: Опция подключена мгновенно
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AbonentOption"
+
+    delete:
+      tags: [Options]
+      summary: Отключить дополнительную опцию
+      description: Отключение происходит мгновенно, без создания заявки (FR11).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/OptionId"
+      responses:
+        "204":
+          description: Опция отключена мгновенно
+
+  /me/history:
+    get:
+      tags: [History]
+      summary: Получить историю смены тарифов и опций абонента
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Список изменений
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/HistoryRecord"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    OptionId:
+      name: optionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Abonent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        phone:
+          type: string
+          example: "+79991234567"
+        tariff_id:
+          type: string
+          format: uuid
+        balance:
+          type: number
+          format: decimal
+
+    Tariff:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Свобода 30"
+        price:
+          type: number
+          format: decimal
+          example: 450
+        minutes:
+          type: integer
+          example: 500
+        sms:
+          type: integer
+          example: 100
+        gb:
+          type: integer
+          example: 30
+
+    Option:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Безлимитные мессенджеры"
+        price:
+          type: number
+          format: decimal
+          example: 99
+        description:
+          type: string
+
+    AbonentOption:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        option_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [active, inactive]
+        connected_at:
+          type: string
+          format: date-time
+
+    HistoryRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        change_type:
+          type: string
+          enum: [tariff, option]
+        value:
+          type: string
+          description: Название нового тарифа или опции
+        changed_at:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
